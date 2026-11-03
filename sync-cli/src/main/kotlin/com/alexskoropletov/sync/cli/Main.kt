@@ -17,7 +17,7 @@ magic-sync синхронизирует папку через ваш серве�
 
   magic-sync keygen --out ФАЙЛ
   magic-sync token
-  magic-sync serve --data ПАПКА --token ТОКЕН [--listen 127.0.0.1:8787]
+  magic-sync serve --data ПАПКА [--token ТОКЕН] [--listen 127.0.0.1:8787]
   magic-sync sync --vault ПАПКА --server АДРЕС --token ТОКЕН --key ФАЙЛ
       [--device ИМЯ] [--state ФАЙЛ] [--allow-mass-delete]
 
@@ -26,7 +26,8 @@ magic-sync синхронизирует папку через ваш серве�
 Большое удаление тоже останавливается, пока нет --allow-mass-delete.
 Адрес http:// годится только внутри Tailscale или WireGuard. Иначе нужен https.
 
-Сервер: java -jar magic-sync.jar serve --data ПАПКА --token ТОКЕН --listen 127.0.0.1:8787
+Токен сервера можно передать переменной MAGIC_SYNC_TOKEN, без --token.
+Сервер: java -jar magic-sync.jar serve --data ПАПКА --listen 127.0.0.1:8787
 """
 
 fun main(args: Array<String>) {
@@ -66,8 +67,12 @@ private fun keygen(args: List<String>) {
 private fun serve(args: List<String>) {
     val flags = flags(args)
     val data = File(flags.values["--data"] ?: error("нужна --data"))
-    val token = flags.values["--token"] ?: error("нужен --token")
-    val listen = flags.values["--listen"] ?: "127.0.0.1:8787"
+    val token = flags.values["--token"]?.takeIf { it.isNotBlank() }
+        ?: System.getenv("MAGIC_SYNC_TOKEN")?.takeIf { it.isNotBlank() }
+        ?: error("нужен --token или переменная MAGIC_SYNC_TOKEN")
+    val listen = flags.values["--listen"]?.takeIf { it.isNotBlank() }
+        ?: System.getenv("MAGIC_SYNC_LISTEN")?.takeIf { it.isNotBlank() }
+        ?: "127.0.0.1:8787"
     val (host, port) = parseListen(listen)
     if (host == "0.0.0.0" || host == "::") {
         System.err.println("Сервер слушает все интерфейсы. Не открывайте этот порт в интернет без https.")

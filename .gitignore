@@ -13,3 +13,5 @@ captures/
 *.ap_
 *.aab
 .DS_Store
+deploy/.env
+deploy/server.env
