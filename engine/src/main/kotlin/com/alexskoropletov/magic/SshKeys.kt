@@ -9,6 +9,7 @@ data class StoredKey(val privateKey: File, val publicKey: String)
 
 object SshKeys {
     fun generate(directory: File, comment: String): StoredKey {
+        SshCrypto.install()
         directory.mkdirs()
         val privateKey = File(directory, "id_ed25519")
         val pair = KeyPair.genKeyPair(JSch(), KeyPair.ED25519)
@@ -24,6 +25,7 @@ object SshKeys {
     }
 
     fun import(bytes: ByteArray, directory: File, passphrase: String?, comment: String): StoredKey {
+        SshCrypto.install()
         directory.mkdirs()
         val privateKey = File(directory, "id_ed25519")
         privateKey.writeBytes(bytes)

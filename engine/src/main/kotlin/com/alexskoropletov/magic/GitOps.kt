@@ -25,6 +25,8 @@ object GitOps {
     private const val TIMEOUT_SECONDS = 120
 
     fun installKey(privateKey: File, passphrase: String?) {
+        SshCrypto.install()
+        SshCrypto.clear()
         if (!privateKey.isFile) {
             throw GitOpException("Сначала выбери или создай приватный ключ")
         }
@@ -190,13 +192,18 @@ object GitOps {
 }
 
 fun Throwable.explain(): String {
-    if (this is GitOpException) return message ?: "Ошибка"
-    return generateSequence(this) { it.cause }
-        .mapNotNull { it.message?.trim() }
-        .filter { it.isNotEmpty() }
-        .distinct()
-        .joinToString("\n")
-        .ifBlank { (this as? GitAPIException)?.javaClass?.simpleName ?: javaClass.simpleName }
+    val text = if (this is GitOpException) {
+        message ?: "Ошибка"
+    } else {
+        generateSequence(this) { it.cause }
+            .mapNotNull { it.message?.trim() }
+            .filter { it.isNotEmpty() }
+            .distinct()
+            .joinToString("\n")
+            .ifBlank { (this as? GitAPIException)?.javaClass?.simpleName ?: javaClass.simpleName }
+    }
+    val ssh = SshCrypto.recent()
+    return if (ssh.isBlank()) text else "$text\n$ssh"
 }
 
 private class KeySshFactory(
@@ -216,5 +223,6 @@ private class KeySshFactory(
     override fun configure(hc: OpenSshConfig.Host, session: Session) {
         session.setConfig("StrictHostKeyChecking", "no")
         session.setConfig("PreferredAuthentications", "publickey")
+        session.setConfig("MaxAuthTries", "6")
     }
 }

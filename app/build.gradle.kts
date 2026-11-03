@@ -33,7 +33,13 @@ android {
 
     packaging {
         resources {
-            excludes += "/META-INF/{AL2.0,LGPL2.1,LICENSE,LICENSE.txt,NOTICE,NOTICE.txt,DEPENDENCIES,INDEX.LIST}"
+            excludes += setOf(
+                "/META-INF/{AL2.0,LGPL2.1,LICENSE,LICENSE.txt,NOTICE,NOTICE.txt,DEPENDENCIES,INDEX.LIST}",
+                "/META-INF/versions/**",
+                "/META-INF/*.SF",
+                "/META-INF/*.DSA",
+                "/META-INF/*.RSA",
+            )
         }
     }
 }

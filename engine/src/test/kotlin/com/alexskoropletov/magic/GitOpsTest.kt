@@ -82,6 +82,17 @@ class GitOpsTest {
         loaded.dispose()
     }
 
+    @Test
+    fun ed25519KeySignsThroughBouncyCastle() {
+        SshCrypto.install()
+        val stored = SshKeys.generate(java.io.File(root, "sign-keys"), "sign@phone")
+        val jsch = JSch()
+        jsch.addIdentity(stored.privateKey.absolutePath)
+        val identity = jsch.identityRepository.identities.iterator().next()
+        val signature = identity.getSignature(byteArrayOf(1, 2, 3, 4), "ssh-ed25519")
+        assertTrue(signature != null && signature.size > 32)
+    }
+
     private fun bareWithSeed(): java.io.File {
         val work = java.io.File(root, "seed-work")
         Git.init().setDirectory(work).setInitialBranch("main").call().use { git ->

@@ -15,6 +15,7 @@ dependencies {
         exclude(group = "com.jcraft", module = "jsch")
     }
     implementation("com.github.mwiede:jsch:2.28.8")
+    implementation("org.bouncycastle:bcprov-jdk18on:1.78.1")
     implementation("org.slf4j:slf4j-nop:1.7.36")
 
     testImplementation("junit:junit:4.13.2")
