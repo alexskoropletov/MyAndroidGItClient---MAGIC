@@ -1,0 +1,7 @@
+<resources>
+    <style name="Theme.Magic" parent="android:Theme.Material.NoActionBar">
+        <item name="android:statusBarColor">#101916</item>
+        <item name="android:navigationBarColor">#101916</item>
+        <item name="android:windowBackground">#F3F7F4</item>
+    </style>
+</resources>
