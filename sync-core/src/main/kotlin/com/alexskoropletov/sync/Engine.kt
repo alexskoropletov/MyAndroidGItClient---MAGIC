@@ -81,16 +81,14 @@ class SyncEngine(
 
             if (delta.overlay.isEmpty() && sameSnapshot(entries, remoteEntries)) {
                 val applied = applyDisk(root, entries, disk)
-                state = state.copy(
+                val next = state.copy(
                     vaultPath = root.path,
                     device = deviceName,
                     revision = pointer.revision,
                     indexBlobId = pointer.blobId.orEmpty(),
                     entries = entries.values.sortedBy { it.path },
                 )
-                saveState(state)
-                log += done(pointer.revision, entries.values, 0, applied, plan.conflicts)
-                return log
+                return finish(log, next, pointer.revision, entries.values, 0, applied, plan.conflicts)
             }
 
             val document = IndexDocument(
@@ -105,23 +103,43 @@ class SyncEngine(
                 continue
             }
             val applied = applyDisk(root, entries, disk)
-            state = LocalState(
+            val next = LocalState(
                 vaultPath = root.path,
                 device = deviceName,
                 revision = document.revision,
                 indexBlobId = indexId,
                 entries = document.entries,
             )
-            saveState(state)
-            log += done(document.revision, entries.values, uploaded, applied, plan.conflicts)
-            return log
+            return finish(log, next, document.revision, entries.values, uploaded, applied, plan.conflicts)
         }
         error("не удалось записать индекс: сервер пять раз успел обновиться раньше")
     }
 
+    private fun finish(
+        log: MutableList<String>,
+        state: LocalState,
+        revision: Long,
+        entries: Collection<FileEntry>,
+        uploaded: Int,
+        applied: Applied,
+        conflicts: Int,
+    ): List<String> {
+        if (applied.failed.isEmpty()) {
+            saveState(state)
+        }
+        log += done(revision, entries, uploaded, applied, conflicts)
+        applied.failed.forEach { log += it }
+        return log
+    }
+
     private fun done(revision: Long, entries: Collection<FileEntry>, uploaded: Int, applied: Applied, conflicts: Int): String {
         val alive = entries.count { !it.deleted }
-        return "Готово. Ревизия $revision. Файлов $alive. Отправлено $uploaded, скачано ${applied.downloaded}, удалено ${applied.deleted}, конфликтов $conflicts."
+        val head = "Готово. Ревизия $revision. Файлов $alive. Отправлено $uploaded, скачано ${applied.downloaded}, удалено ${applied.deleted}, конфликтов $conflicts."
+        return if (applied.failed.isEmpty()) {
+            head
+        } else {
+            "$head Не записал ${applied.failed.size}, повторю их в следующий раз."
+        }
     }
 
     private fun loadState(): LocalState {
@@ -169,25 +187,30 @@ class SyncEngine(
     private fun applyDisk(root: File, entries: Map<String, FileEntry>, disk: Map<String, String>): Applied {
         var downloaded = 0
         var deleted = 0
+        val failed = mutableListOf<String>()
         for (entry in entries.values.sortedBy { it.path }) {
             if (VaultPaths.isIgnored(entry.path)) continue
-            val file = VaultPaths.resolve(root, entry.path)
-            if (entry.deleted) {
-                if (file.isFile) {
-                    if (!file.delete()) error("не удалось удалить ${entry.path}")
-                    deleted++
+            try {
+                val file = VaultPaths.resolve(root, entry.path)
+                if (entry.deleted) {
+                    if (file.isFile) {
+                        if (!file.delete()) error("не удалось удалить ${entry.path}")
+                        deleted++
+                    }
+                    continue
                 }
-                continue
+                if (disk[entry.path] == entry.hash && file.isFile) continue
+                if (file.isDirectory) error("на месте файла папка: ${entry.path}")
+                val plain = decrypt(remote.getBlob(entry.blobId), entry.path)
+                if (Crypto.sha256(plain) != entry.hash) error("хэш не сошёлся: ${entry.path}")
+                atomicWrite(file, plain)
+                downloaded++
+            } catch (e: Exception) {
+                failed += "${entry.path} — ${e.message ?: "не записался"}"
             }
-            if (disk[entry.path] == entry.hash && file.isFile) continue
-            if (file.isDirectory) error("на месте файла папка: ${entry.path}")
-            val plain = decrypt(remote.getBlob(entry.blobId), entry.path)
-            if (Crypto.sha256(plain) != entry.hash) error("хэш не сошёлся: ${entry.path}")
-            atomicWrite(file, plain)
-            downloaded++
         }
         pruneEmptyDirs(root)
-        return Applied(downloaded, deleted)
+        return Applied(downloaded, deleted, failed)
     }
 
     private fun pruneEmptyDirs(root: File) {
@@ -207,5 +230,5 @@ class SyncEngine(
         }
     }
 
-    private data class Applied(val downloaded: Int, val deleted: Int)
+    private data class Applied(val downloaded: Int, val deleted: Int, val failed: List<String> = emptyList())
 }

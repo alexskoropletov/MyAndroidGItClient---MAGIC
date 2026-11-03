@@ -24,7 +24,7 @@ fun InputStream.readLimited(max: Int): ByteArray {
 fun atomicWrite(target: File, bytes: ByteArray) {
     val parent = target.parentFile ?: error("нет папки для ${target.path}")
     if (!parent.isDirectory && !parent.mkdirs()) error("не создалась папка ${parent.path}")
-    val tmp = File(parent, ".magic-sync-tmp-${target.name}-${System.nanoTime()}")
+    val tmp = File(parent, ".magic-sync-tmp-${System.nanoTime()}")
     try {
         tmp.writeBytes(bytes)
         try {

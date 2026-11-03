@@ -125,8 +125,8 @@ class EngineTest {
             val id = world.remote.blobs.keys.first { it != world.remote.indexId }
             val bytes = world.remote.blobs.getValue(id)
             bytes[bytes.lastIndex] = (bytes[bytes.lastIndex] + 1).toByte()
-            val error = runCatching { world.engine(world.b, "phone").sync() }.exceptionOrNull()
-            assertTrue(error?.message, error?.message?.contains("расшифровать") == true)
+            val log = world.engine(world.b, "phone").sync().joinToString("\n")
+            assertTrue(log, log.contains("расшифровать"))
             assertFalse(File(world.b, "note.md").exists())
         }
     }

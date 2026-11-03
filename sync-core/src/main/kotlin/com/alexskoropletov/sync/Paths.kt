@@ -16,16 +16,29 @@ object VaultPaths {
         return relative == ".obsidian/workspace.json" || relative == ".obsidian/workspace-mobile.json"
     }
 
+    fun colonAllowed(): Boolean {
+        val vm = System.getProperty("java.vm.name").orEmpty()
+        return !vm.contains("Dalvik", ignoreCase = true)
+    }
+
+    fun toDisk(relative: String, forbidColon: Boolean = !colonAllowed()): String {
+        return if (forbidColon) relative.replace(':', '\uFF1A') else relative
+    }
+
+    fun fromDisk(relative: String, forbidColon: Boolean = !colonAllowed()): String {
+        return if (forbidColon) relative.replace('\uFF1A', ':') else relative
+    }
+
     fun relative(root: java.nio.file.Path, file: java.nio.file.Path): String {
         val rel = root.relativize(file).toString().replace('\\', '/')
         checkPath(rel)
-        return rel
+        return fromDisk(rel)
     }
 
     fun resolve(root: File, relative: String): File {
         checkPath(relative)
         val rootPath = root.canonicalFile.toPath()
-        val target = rootPath.resolve(relative).normalize()
+        val target = rootPath.resolve(toDisk(relative)).normalize()
         require(target.startsWith(rootPath)) { "путь выходит из хранилища: $relative" }
         return target.toFile()
     }

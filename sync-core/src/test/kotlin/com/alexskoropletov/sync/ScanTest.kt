@@ -8,6 +8,15 @@ import org.junit.Test
 
 class ScanTest {
     @Test
+    fun colonInNameIsStoredAsFullwidthWhenFilesystemForbidsIt() {
+        val logical = "Навыки/Иврит 15 — Монолог: еда.md"
+        val stored = VaultPaths.toDisk(logical, forbidColon = true)
+        assertFalse(stored.contains(':'))
+        assertEquals(logical, VaultPaths.fromDisk(stored, forbidColon = true))
+        assertEquals(logical, VaultPaths.toDisk(logical, forbidColon = false))
+    }
+
+    @Test
     fun skipsGitWorkspaceSymlinkAndKeepsRealNotes() {
         val root = Files.createTempDirectory("scan").toFile()
         val outside = Files.createTempDirectory("outside").toFile()
