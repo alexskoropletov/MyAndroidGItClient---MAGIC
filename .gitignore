@@ -6,6 +6,7 @@ local.properties
 .cxx/
 captures/
 *.apk
+!dist/*.apk
 *.ap_
 *.aab
 .DS_Store
