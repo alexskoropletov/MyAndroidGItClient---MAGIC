@@ -69,18 +69,31 @@ fun localDelta(
         }
     }
 
+    // Пустой диск часто значит «папка не смонтировалась», а не удаление.
+    // Если заметки ещё есть, пропавшая подпапка — обычное удаление.
+    val vaultLooksPresent = disk.isNotEmpty()
     val hidden = mutableListOf<String>()
     val tombstones = mutableListOf<String>()
     if (vault.isDirectory) {
         for ((path, previous) in base) {
             if (previous.deleted || VaultPaths.isIgnored(path) || path in disk) continue
-            if (parentExists(vault, path)) tombstones += path else hidden += path
+            if (parentExists(vault, path) || vaultLooksPresent) {
+                tombstones += path
+            } else {
+                hidden += path
+            }
         }
     }
 
     val living = base.values.count { !it.deleted }
-    val tooMany = tombstones.size > Limits.MASS_DELETE_LIMIT ||
-        (living >= 10 && tombstones.size * 2 > living)
+    val gone = tombstones.size
+    // Блокируем опустевший диск с кучей пропаж и удаление больше половины хранилища.
+    val tooMany = when {
+        gone == 0 -> false
+        !vaultLooksPresent && gone >= 10 -> true
+        living >= 10 && gone * 2 > living -> true
+        else -> false
+    }
     val blocked = tooMany && !allowMassDelete
     if (!blocked) {
         for (path in tombstones) overlay[path] = tombstone(base.getValue(path), device)
@@ -92,7 +105,7 @@ fun localDelta(
         overlay = overlay,
         hidden = if (allowMassDelete) emptyList() else hidden,
         massDeleteBlocked = blocked,
-        massDeleteCount = tombstones.size,
+        massDeleteCount = gone,
     )
 }
 

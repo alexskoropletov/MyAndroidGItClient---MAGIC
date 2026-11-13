@@ -53,7 +53,7 @@ class EngineTest {
             world.engine(world.b, "phone").sync()
             File(world.b, "dir").deleteRecursively()
             val log = world.engine(world.b, "phone").sync()
-            assertTrue(log.joinToString("\n"), log.any { "нет папки" in it })
+            assertTrue(log.joinToString("\n"), log.any { "выглядит пустым" in it || "нет папки" in it })
             assertEquals("secret", File(world.b, "dir/a.md").readText())
             assertEquals("secret", File(world.a, "dir/a.md").readText())
         }
@@ -75,8 +75,9 @@ class EngineTest {
             File(world.b, "dir/gone.md").writeText("bye")
             world.engine(world.b, "phone").sync()
             world.engine(world.a, "computer").sync()
+            // На диске ещё остаются общие файлы — удаление папки доходит само.
             File(world.b, "dir").deleteRecursively()
-            world.engine(world.b, "phone", allowMassDelete = true).sync()
+            world.engine(world.b, "phone").sync()
             world.engine(world.a, "computer").sync()
             assertFalse(File(world.a, "dir/gone.md").exists())
             assertEquals("x0", File(world.a, "f0.md").readText())

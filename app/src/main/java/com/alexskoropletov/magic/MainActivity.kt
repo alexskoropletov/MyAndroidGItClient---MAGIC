@@ -6,6 +6,7 @@ import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
 import android.os.Environment
@@ -17,6 +18,7 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
@@ -44,12 +46,16 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.alexskoropletov.sync.Crypto
 import com.alexskoropletov.sync.HttpRemote
+import com.alexskoropletov.sync.SetupQr
 import com.alexskoropletov.sync.SyncEngine
 import com.alexskoropletov.sync.VaultPaths
 import com.alexskoropletov.sync.defaultStateFile
+import com.journeyapps.barcodescanner.ScanContract
+import com.journeyapps.barcodescanner.ScanOptions
 import java.io.File
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -84,11 +90,38 @@ private fun SyncScreen() {
     }
     var allowMass by remember { mutableStateOf(false) }
     var busy by remember { mutableStateOf(false) }
+    var detailsOpen by remember {
+        mutableStateOf(server.isBlank() || token.isBlank() || path.isBlank())
+    }
     var log by remember { mutableStateOf("Ключ один и тот же на телефоне и компьютере. На сервер его не отправляют.") }
     val scope = rememberCoroutineScope()
 
     fun save(key: String, value: String) {
         prefs.edit().putString(key, value).apply()
+    }
+
+    val scanLauncher = rememberLauncherForActivityResult(ScanContract()) { result ->
+        val text = result.contents ?: return@rememberLauncherForActivityResult
+        try {
+            val card = SetupQr.decode(text)
+            server = card.server
+            token = card.token
+            device = card.device
+            save("server", card.server)
+            save("token", card.token)
+            save("device", card.device)
+            log = "Считал QR. Сервер ${card.server}, устройство ${card.device}."
+            if (path.isNotBlank() && keyFile.isFile) detailsOpen = false
+        } catch (e: Exception) {
+            log = e.message ?: "не прочитал QR"
+        }
+    }
+    val cameraPermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+        if (granted) scanLauncher.launch(setupScanOptions()) else log = "Нет доступа к камере, QR не прочитать."
+    }
+    fun startScan() {
+        val granted = context.checkSelfPermission(Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED
+        if (granted) scanLauncher.launch(setupScanOptions()) else cameraPermission.launch(Manifest.permission.CAMERA)
     }
 
     val treeLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
@@ -119,99 +152,139 @@ private fun SyncScreen() {
     Column(
         Modifier
             .fillMaxSize()
-            .verticalScroll(rememberScrollState())
             .padding(20.dp),
         verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
         Text("MAGIC", style = MaterialTheme.typography.headlineMedium)
-        Text(
-            "Папка на этом телефоне и на компьютере. Сервер хранит только шифр и не видит названия заметок.",
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.75f),
-        )
-        OutlinedTextField(
-            value = server,
-            onValueChange = { server = it; save("server", it) },
-            label = { Text("Сервер") },
-            placeholder = { Text("https://vps:8787") },
-            singleLine = true,
-            modifier = Modifier.fillMaxWidth(),
-        )
-        Text(
-            "Голый http только внутри Tailscale или WireGuard. Иначе токен виден сети.",
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f),
-        )
-        OutlinedTextField(
-            value = token,
-            onValueChange = { token = it; save("token", it) },
-            label = { Text("Токен") },
-            singleLine = true,
-            modifier = Modifier.fillMaxWidth(),
-        )
-        OutlinedTextField(
-            value = device,
-            onValueChange = { device = it; save("device", it) },
-            label = { Text("Имя устройства") },
-            singleLine = true,
-            modifier = Modifier.fillMaxWidth(),
-        )
-        OutlinedTextField(
-            value = path,
-            onValueChange = { path = it; save("path", it) },
-            label = { Text("Папка заметок") },
-            singleLine = true,
-            modifier = Modifier.fillMaxWidth(),
-        )
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            OutlinedButton(onClick = { askStorage(context, legacyPermissions) }) { Text("Доступ к файлам") }
-            OutlinedButton(onClick = { treeLauncher.launch(null) }) { Text("Выбрать") }
-        }
         OutlinedButton(
-            onClick = {
-                val dir = context.getExternalFilesDir(null) ?: context.filesDir
-                path = dir.absolutePath
-                save("path", path)
-            },
-        ) { Text("Папка приложения") }
-        Text(
-            if (fingerprint.isEmpty()) "Ключа ещё нет." else "Отпечаток ключа $fingerprint",
-            style = MaterialTheme.typography.bodyMedium,
-        )
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            if (fingerprint.isEmpty()) {
-                Button(onClick = {
-                    val key = Crypto.keygen()
-                    Crypto.writeKey(keyFile, key)
-                    fingerprint = Crypto.fingerprint(key)
-                    log = "Новый ключ. Скопируйте его на компьютер. Отпечаток $fingerprint"
-                }) { Text("Создать ключ") }
-            } else {
-                OutlinedButton(onClick = {
-                    val clip = ClipData.newPlainText("magic-sync", keyFile.readText())
-                    context.getSystemService(ClipboardManager::class.java).setPrimaryClip(clip)
-                    log = "Ключ скопирован. Вставьте его в файл на компьютере. Отпечаток $fingerprint"
-                }) { Text("Скопировать ключ") }
-            }
-            OutlinedButton(onClick = { keyLauncher.launch(arrayOf("*/*")) }) { Text("Взять из файла") }
+            onClick = { detailsOpen = !detailsOpen },
+            modifier = Modifier.fillMaxWidth(),
+        ) { Text(if (detailsOpen) "Скрыть данные" else "Показать данные") }
+        if (!detailsOpen) {
+            Text(
+                setupSummary(server, device, fingerprint, allowMass),
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.75f),
+                maxLines = 3,
+                overflow = TextOverflow.Ellipsis,
+            )
         }
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Checkbox(checked = allowMass, onCheckedChange = { allowMass = it })
-            Text("Это удаление папки, а не сбой")
+        if (detailsOpen) {
+            Column(
+                Modifier
+                    .weight(1f)
+                    .verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+                Text(
+                    "Папка на этом телефоне и на компьютере. Сервер хранит только шифр и не видит названия заметок.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.75f),
+                )
+                OutlinedTextField(
+                    value = server,
+                    onValueChange = { server = it; save("server", it) },
+                    label = { Text("Сервер") },
+                    placeholder = { Text("https://vps:8787") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                Text(
+                    "Голый http только внутри Tailscale или WireGuard. Иначе токен виден сети.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f),
+                )
+                OutlinedTextField(
+                    value = token,
+                    onValueChange = { token = it; save("token", it) },
+                    label = { Text("Токен") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                OutlinedTextField(
+                    value = device,
+                    onValueChange = { device = it; save("device", it) },
+                    label = { Text("Имя устройства") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                OutlinedTextField(
+                    value = path,
+                    onValueChange = { path = it; save("path", it) },
+                    label = { Text("Папка заметок") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedButton(onClick = { askStorage(context, legacyPermissions) }) { Text("Доступ к файлам") }
+                    OutlinedButton(onClick = { treeLauncher.launch(null) }) { Text("Выбрать") }
+                }
+                OutlinedButton(
+                    onClick = {
+                        val dir = context.getExternalFilesDir(null) ?: context.filesDir
+                        path = dir.absolutePath
+                        save("path", path)
+                    },
+                ) { Text("Папка приложения") }
+                Text(
+                    if (fingerprint.isEmpty()) "Ключа ещё нет." else "Отпечаток ключа $fingerprint",
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    if (fingerprint.isEmpty()) {
+                        Button(onClick = {
+                            val key = Crypto.keygen()
+                            Crypto.writeKey(keyFile, key)
+                            fingerprint = Crypto.fingerprint(key)
+                            log = "Новый ключ. Скопируйте его на компьютер. Отпечаток $fingerprint"
+                        }) { Text("Создать ключ") }
+                    } else {
+                        OutlinedButton(onClick = {
+                            val clip = ClipData.newPlainText("magic-sync", keyFile.readText())
+                            context.getSystemService(ClipboardManager::class.java).setPrimaryClip(clip)
+                            log = "Ключ скопирован. Вставьте его в файл на компьютере. Отпечаток $fingerprint"
+                        }) { Text("Скопировать ключ") }
+                    }
+                    OutlinedButton(onClick = { keyLauncher.launch(arrayOf("*/*")) }) { Text("Взять из файла") }
+                }
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Checkbox(checked = allowMass, onCheckedChange = { allowMass = it })
+                    Text("Это удаление папки, а не сбой")
+                }
+                OutlinedButton(
+                    onClick = {
+                        val vault = File(path.trim())
+                        val state = defaultStateFile(context.filesDir, vault)
+                        val removed = state.delete()
+                        log = if (removed) {
+                            "Забыл состояние этой папки. Удалённые раньше файлы могут вернуться."
+                        } else {
+                            "Для этой папки ещё нечего забывать."
+                        }
+                    },
+                    enabled = !busy,
+                ) { Text("Забыть состояние папки") }
+            }
+        }
+        OutlinedButton(onClick = { startScan() }, modifier = Modifier.fillMaxWidth()) {
+            Text("Сканировать QR")
         }
         Button(
             onClick = {
                 if (busy) return@Button
                 val vaultPath = path.trim()
                 if (server.isBlank() || token.isBlank() || vaultPath.isBlank()) {
+                    detailsOpen = true
                     log = "Нужны адрес сервера, токен и папка."
                     return@Button
                 }
                 if (!keyFile.isFile) {
+                    detailsOpen = true
                     log = "Нет ключа. Создайте его здесь или принесите с компьютера."
                     return@Button
                 }
                 if (!context.canRead(vaultPath)) {
+                    detailsOpen = true
                     log = "Нет доступа к этой папке. Нажмите «Доступ к файлам» или возьмите папку приложения."
                     return@Button
                 }
@@ -241,23 +314,32 @@ private fun SyncScreen() {
             enabled = !busy,
             modifier = Modifier.fillMaxWidth(),
         ) { Text(if (busy) "Синхронизирую…" else "Синхронизировать") }
-        OutlinedButton(
-            onClick = {
-                val vault = File(path.trim())
-                val state = defaultStateFile(context.filesDir, vault)
-                val removed = state.delete()
-                log = if (removed) {
-                    "Забыл состояние этой папки. Удалённые раньше файлы могут вернуться."
-                } else {
-                    "Для этой папки ещё нечего забывать."
-                }
-            },
-            enabled = !busy,
-        ) { Text("Забыть состояние папки") }
-        SelectionContainer {
-            Text(log, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.fillMaxWidth())
+        Box(
+            Modifier
+                .weight(1f)
+                .fillMaxWidth()
+                .verticalScroll(rememberScrollState()),
+        ) {
+            SelectionContainer {
+                Text(log, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.fillMaxWidth())
+            }
         }
     }
+}
+
+private fun setupScanOptions() = ScanOptions().apply {
+    setDesiredBarcodeFormats(ScanOptions.QR_CODE)
+    setPrompt("Код с компьютера")
+    setBeepEnabled(false)
+    setOrientationLocked(false)
+}
+
+private fun setupSummary(server: String, device: String, fingerprint: String, allowMass: Boolean): String {
+    val host = server.trim().ifBlank { "сервер не задан" }
+    val name = device.trim().ifBlank { "без имени" }
+    val key = if (fingerprint.isEmpty()) "ключа нет" else "ключ $fingerprint"
+    val mass = if (allowMass) " · удаление папки разрешено" else ""
+    return "$host · $name · $key$mass"
 }
 
 @Composable

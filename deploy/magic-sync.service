@@ -7,8 +7,8 @@ Wants=network-online.target
 Type=simple
 User=magic-sync
 Group=magic-sync
-WorkingDirectory=/opt/magic-sync
-ExecStart=/opt/magic-sync/serve.sh
+WorkingDirectory=@REMOTE_DIR@
+ExecStart=@REMOTE_DIR@/serve.sh
 Restart=on-failure
 RestartSec=3
 

@@ -1,21 +1,20 @@
 #!/usr/bin/env bash
-# Деплой magic-sync на тот же VPS, что и lootkeep.
+# Деплой magic-sync. Адрес, токен и пути берутся из .env.
 #
-#   cp deploy/.env.example deploy/.env
+#   cp .env.example .env
 #   ./scripts/deploy-remote.sh up      # jar, Java 17, systemd, проверка
 #   ./scripts/deploy-remote.sh check
 #   ./scripts/deploy-remote.sh logs
-#   ./scripts/deploy-remote.sh token   # показать токен из deploy/server.env
+#   ./scripts/deploy-remote.sh token   # показать токен из .env
 #   ./scripts/deploy-remote.sh down    # остановить, данные на сервере остаются
 #
-# deploy/.env и deploy/server.env в git не коммитятся.
+# .env в git не коммитится.
 # Ключ заметок на сервер не отправляется.
 
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-DEPLOY_ENV="${DEPLOY_ENV:-$ROOT/deploy/.env}"
-SERVER_ENV="${SERVER_ENV:-$ROOT/deploy/server.env}"
+ENV_FILE="${ENV_FILE:-$ROOT/.env}"
 
 usage() {
   sed -n '2,12p' "$0" | sed 's/^# \?//'
@@ -33,28 +32,20 @@ require_file() {
 }
 
 load_env() {
-  require_file "$DEPLOY_ENV" "скопируйте deploy/.env.example в deploy/.env"
+  require_file "$ENV_FILE" "скопируйте .env.example в .env"
   # shellcheck disable=SC1090
   set -a
   # shellcheck disable=SC1090
-  source "$DEPLOY_ENV"
+  source "$ENV_FILE"
   set +a
-  : "${DEPLOY_HOST:?укажите DEPLOY_HOST в deploy/.env}"
-  : "${DEPLOY_USER:?укажите DEPLOY_USER в deploy/.env}"
-  DEPLOY_PORT="${DEPLOY_PORT:-22}"
-  DEPLOY_REMOTE_DIR="${DEPLOY_REMOTE_DIR:-/opt/magic-sync}"
-}
-
-load_server_env() {
-  require_file "$SERVER_ENV" "запустите ./scripts/deploy-remote.sh up, он создаст deploy/server.env"
-  # shellcheck disable=SC1090
-  set -a
-  # shellcheck disable=SC1090
-  source "$SERVER_ENV"
-  set +a
-  : "${MAGIC_SYNC_TOKEN:?в deploy/server.env нет MAGIC_SYNC_TOKEN}"
-  MAGIC_SYNC_LISTEN="${MAGIC_SYNC_LISTEN:-0.0.0.0:8787}"
-  MAGIC_SYNC_DATA="${MAGIC_SYNC_DATA:-/opt/magic-sync/data}"
+  : "${DEPLOY_HOST:?укажите DEPLOY_HOST в .env}"
+  : "${DEPLOY_USER:?укажите DEPLOY_USER в .env}"
+  : "${DEPLOY_PORT:?укажите DEPLOY_PORT в .env}"
+  : "${DEPLOY_REMOTE_DIR:?укажите DEPLOY_REMOTE_DIR в .env}"
+  : "${MAGIC_SYNC_TOKEN:?укажите MAGIC_SYNC_TOKEN в .env}"
+  : "${MAGIC_SYNC_LISTEN:?укажите MAGIC_SYNC_LISTEN в .env}"
+  : "${MAGIC_SYNC_DATA:?укажите MAGIC_SYNC_DATA в .env}"
+  : "${MAGIC_SYNC_JAVA:?укажите MAGIC_SYNC_JAVA в .env}"
 }
 
 ssh_base() {
@@ -84,34 +75,39 @@ listen_port() {
   printf '%s\n' "${listen##*:}"
 }
 
-ensure_server_env() {
-  if [[ -f "$SERVER_ENV" ]]; then
+ensure_token() {
+  if [[ -n "${MAGIC_SYNC_TOKEN:-}" && "$MAGIC_SYNC_TOKEN" != "замените-на-длинный-токен" ]]; then
     return
   fi
-  local token
-  token="$(openssl rand -hex 24)"
-  umask 077
-  cat > "$SERVER_ENV" <<EOF
-MAGIC_SYNC_TOKEN=${token}
-MAGIC_SYNC_LISTEN=0.0.0.0:8787
-MAGIC_SYNC_DATA=/opt/magic-sync/data
-MAGIC_SYNC_JAVA=/usr/bin/java
-EOF
-  chmod 600 "$SERVER_ENV"
-  echo "Создан ${SERVER_ENV}. Токен в git не попадёт."
+  set_env_value MAGIC_SYNC_TOKEN "$(openssl rand -hex 24)"
+  load_env
+  echo "В ${ENV_FILE} записан новый токен."
 }
 
 set_env_value() {
   local key="$1" value="$2"
-  if grep -q "^${key}=" "$SERVER_ENV"; then
-    local tmp
-    tmp="$(mktemp)"
-    awk -v k="$key" -v v="$value" 'index($0, k "=") == 1 { print k "=" v; next } { print }' "$SERVER_ENV" > "$tmp"
-    mv "$tmp" "$SERVER_ENV"
+  local tmp
+  tmp="$(mktemp)"
+  if grep -q "^${key}=" "$ENV_FILE"; then
+    awk -v k="$key" -v v="$value" 'index($0, k "=") == 1 { print k "=" v; next } { print }' "$ENV_FILE" > "$tmp"
   else
-    printf '%s=%s\n' "$key" "$value" >> "$SERVER_ENV"
+    cat "$ENV_FILE" > "$tmp"
+    printf '%s=%s\n' "$key" "$value" >> "$tmp"
   fi
-  chmod 600 "$SERVER_ENV"
+  mv "$tmp" "$ENV_FILE"
+  chmod 600 "$ENV_FILE"
+}
+
+server_env_file() {
+  local out="$1"
+  umask 077
+  cat > "$out" <<EOF
+MAGIC_SYNC_TOKEN=${MAGIC_SYNC_TOKEN}
+MAGIC_SYNC_LISTEN=${MAGIC_SYNC_LISTEN}
+MAGIC_SYNC_DATA=${MAGIC_SYNC_DATA}
+MAGIC_SYNC_JAVA=${MAGIC_SYNC_JAVA}
+EOF
+  chmod 600 "$out"
 }
 
 build_jar() {
@@ -160,8 +156,16 @@ sync_files() {
   remote "mkdir -p $(printf '%q' "$DEPLOY_REMOTE_DIR")/data"
   RSYNC_RSH="${rsh[*]}" rsync -az "$ROOT/sync-cli/build/libs/magic-sync.jar" "${dest}magic-sync.jar"
   RSYNC_RSH="${rsh[*]}" rsync -az "$ROOT/deploy/serve.sh" "${dest}serve.sh"
-  RSYNC_RSH="${rsh[*]}" rsync -az "$SERVER_ENV" "${dest}magic-sync.env"
-  remote "cat > /etc/systemd/system/magic-sync.service" < "$ROOT/deploy/magic-sync.service"
+  local runtime
+  runtime="$(mktemp)"
+  server_env_file "$runtime"
+  RSYNC_RSH="${rsh[*]}" rsync -az "$runtime" "${dest}magic-sync.env"
+  rm -f "$runtime"
+  local unit
+  unit="$(mktemp)"
+  sed "s|@REMOTE_DIR@|${DEPLOY_REMOTE_DIR}|g" "$ROOT/deploy/magic-sync.service" > "$unit"
+  remote "cat > /etc/systemd/system/magic-sync.service" < "$unit"
+  rm -f "$unit"
 }
 
 install_service() {
@@ -205,16 +209,19 @@ cmd_check() {
     remote "journalctl -u magic-sync -n 40 --no-pager" || true
     die "ждал 401 от /v1/index, получил ${code:-нет ответа}"
   fi
-  echo "Адрес для телефона и компьютера: http://${DEPLOY_HOST}:${port}"
-  echo "Токен: ${SERVER_ENV}"
+  if [[ -n "${SYNC_SERVER:-}" ]]; then
+    echo "Адрес для телефона и компьютера: ${SYNC_SERVER}"
+  else
+    echo "Адрес для телефона и компьютера: http://${DEPLOY_HOST}:${port}"
+  fi
+  echo "Токен: ${ENV_FILE}"
 }
 
 cmd_up() {
-  ensure_server_env
-  load_server_env
+  ensure_token
   build_jar
   ensure_remote_java
-  load_server_env
+  load_env
   sync_files
   install_service
   sleep 1
@@ -222,7 +229,6 @@ cmd_up() {
 }
 
 cmd_token() {
-  load_server_env
   printf '%s\n' "$MAGIC_SYNC_TOKEN"
 }
 
@@ -240,8 +246,8 @@ main() {
   case "$cmd" in
     -h|--help|help|'') usage ;;
     up) load_env; cmd_up ;;
-    check|status) load_env; load_server_env; cmd_check ;;
-    token) load_server_env; cmd_token ;;
+    check|status) load_env; cmd_check ;;
+    token) load_env; cmd_token ;;
     down) load_env; cmd_down ;;
     logs) load_env; cmd_logs ;;
     *) die "не понял команду: $cmd (см. --help)" ;;

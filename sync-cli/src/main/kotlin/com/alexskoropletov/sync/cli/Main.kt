@@ -2,6 +2,8 @@ package com.alexskoropletov.sync.cli
 
 import com.alexskoropletov.sync.Crypto
 import com.alexskoropletov.sync.HttpRemote
+import com.alexskoropletov.sync.SetupCard
+import com.alexskoropletov.sync.SetupQr
 import com.alexskoropletov.sync.SyncEngine
 import com.alexskoropletov.sync.VaultPaths
 import com.alexskoropletov.sync.defaultStateFile
@@ -17,6 +19,7 @@ magic-sync синхронизирует папку через ваш серве�
 
   magic-sync keygen --out ФАЙЛ
   magic-sync token
+  magic-sync qr --server АДРЕС --device ИМЯ-ТЕЛЕФОНА [--out ФАЙЛ.png]
   magic-sync serve --data ПАПКА [--token ТОКЕН] [--listen 127.0.0.1:8787]
   magic-sync sync --vault ПАПКА --server АДРЕС --token ТОКЕН --key ФАЙЛ
       [--device ИМЯ] [--state ФАЙЛ] [--allow-mass-delete]
@@ -27,6 +30,8 @@ magic-sync синхронизирует папку через ваш серве�
 Адрес http:// годится только внутри Tailscale или WireGuard. Иначе нужен https.
 
 Токен сервера можно передать переменной MAGIC_SYNC_TOKEN, без --token.
+QR несёт адрес, токен и имя устройства. Ключ в код не входит.
+Имя в QR — имя телефона, который его сканирует.
 Сервер: java -jar magic-sync.jar serve --data ПАПКА --listen 127.0.0.1:8787
 """
 
@@ -35,6 +40,7 @@ fun main(args: Array<String>) {
         when (args.firstOrNull()) {
             "keygen" -> keygen(args.drop(1))
             "token" -> println(Crypto.token())
+            "qr" -> qr(args.drop(1))
             "serve" -> serve(args.drop(1))
             "sync" -> sync(args.drop(1))
             else -> {
@@ -62,6 +68,29 @@ private fun keygen(args: List<String>) {
     }
     println("Ключ записан в ${out.path}")
     println("Отпечаток ${Crypto.fingerprint(key)}")
+}
+
+private fun qr(args: List<String>) {
+    val flags = flags(args)
+    val server = flags.values["--server"]?.takeIf { it.isNotBlank() }
+        ?: System.getenv("SYNC_SERVER")?.takeIf { it.isNotBlank() }
+        ?: error("нужен --server")
+    val token = flags.values["--token"]?.takeIf { it.isNotBlank() }
+        ?: System.getenv("MAGIC_SYNC_TOKEN")?.takeIf { it.isNotBlank() }
+        ?: error("нужен --token или переменная MAGIC_SYNC_TOKEN")
+    val device = flags.values["--device"]?.takeIf { it.isNotBlank() }
+        ?: error("нужен --device: имя телефона, который сканирует код")
+    val payload = SetupQr.encode(SetupCard(server = server, token = token, device = device))
+    val matrix = qrMatrix(payload)
+    printQr(matrix)
+    val out = flags.values["--out"]?.takeIf { it.isNotBlank() }
+    if (out != null) {
+        val file = File(out)
+        writeQrPng(matrix, file)
+        println("Картинка: ${file.path}")
+    }
+    println("Устройство в коде: $device")
+    println("На телефоне нажмите «Сканировать QR».")
 }
 
 private fun serve(args: List<String>) {

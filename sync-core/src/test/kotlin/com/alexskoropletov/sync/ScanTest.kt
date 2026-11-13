@@ -55,7 +55,7 @@ class ScanTest {
     }
 
     @Test
-    fun missingParentIsNotADelete() {
+    fun emptyVaultMissingFolderIsNotADelete() {
         val root = Files.createTempDirectory("scan").toFile()
         try {
             FileDir(root, "dir").mkdirs()
@@ -69,6 +69,27 @@ class ScanTest {
             val allowed = localDelta(base, scanVault(root).files, root, "computer", allowMassDelete = true)
             assertTrue(allowed.overlay.getValue("dir/a.md").deleted)
             assertTrue(allowed.hidden.isEmpty())
+        } finally {
+            root.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun missingFolderWhileOtherNotesRemainIsADelete() {
+        val root = Files.createTempDirectory("scan").toFile()
+        try {
+            FileDir(root, "common.md").writeText("keep")
+            FileDir(root, "private").mkdirs()
+            FileDir(root, "private/secret.md").writeText("gone")
+            val scan = scanVault(root).files
+            val base = scan.mapValues { (path, hash) ->
+                FileEntry(path, hash, 1, updatedBy = "computer", blobId = "b")
+            }
+            FileDir(root, "private").deleteRecursively()
+            val delta = localDelta(base, scanVault(root).files, root, "computer", allowMassDelete = false)
+            assertTrue(delta.hidden.isEmpty())
+            assertTrue(delta.overlay.getValue("private/secret.md").deleted)
+            assertFalse(delta.massDeleteBlocked)
         } finally {
             root.deleteRecursively()
         }
@@ -89,6 +110,28 @@ class ScanTest {
             assertFalse(allowed.massDeleteBlocked)
             assertEquals(40, allowed.overlay.size)
             assertTrue(allowed.overlay.values.all { it.deleted })
+        } finally {
+            root.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun pruningASubtreeIsNotMassDelete() {
+        val root = Files.createTempDirectory("scan").toFile()
+        try {
+            val kept = (1..80).associate { n ->
+                "keep/f$n.md" to FileEntry("keep/f$n.md", "k$n", 1, updatedBy = "computer", blobId = "k$n")
+            }
+            val gone = (1..40).associate { n ->
+                "private/f$n.md" to FileEntry("private/f$n.md", "p$n", 1, updatedBy = "computer", blobId = "p$n")
+            }
+            val disk = kept.keys.associateWith { "k" }
+            FileDir(root, "keep").mkdirs()
+            for (name in kept.keys) FileDir(root, name).writeText("x")
+            val delta = localDelta(kept + gone, disk, root, "computer", allowMassDelete = false)
+            assertFalse(delta.massDeleteBlocked)
+            assertEquals(40, delta.overlay.count { it.value.deleted })
+            assertTrue(delta.hidden.isEmpty())
         } finally {
             root.deleteRecursively()
         }

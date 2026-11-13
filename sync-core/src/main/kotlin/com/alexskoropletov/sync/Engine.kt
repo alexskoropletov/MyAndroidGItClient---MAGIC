@@ -38,10 +38,10 @@ class SyncEngine(
             val delta = localDelta(state.byPath(), disk, root, deviceName, allowMassDelete)
             if (!noted) {
                 if (delta.massDeleteBlocked) {
-                    log += "С диска пропало ${delta.massDeleteCount} файлов. Не удаляю их на других устройствах и скачиваю обратно."
+                    log += "С диска пропало ${delta.massDeleteCount} файлов. Не удаляю их на других устройствах и скачиваю обратно. Если удаление намеренное — включите «удаление папки» / --allow-mass-delete."
                 }
                 if (delta.hidden.isNotEmpty()) {
-                    log += "Не видно ${delta.hidden.size} файлов: нет папки, где они лежали. Не удаляю их и скачиваю обратно."
+                    log += "Не видно ${delta.hidden.size} файлов: хранилище выглядит пустым. Не удаляю их и скачиваю обратно. Если удаление намеренное — --allow-mass-delete."
                 }
                 noted = true
             }
