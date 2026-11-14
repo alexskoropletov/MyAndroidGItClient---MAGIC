@@ -1,5 +1,6 @@
 package com.alexskoropletov.sync
 
+import java.io.IOException
 import java.net.HttpURLConnection
 import java.net.URL
 
@@ -43,11 +44,26 @@ class HttpRemote(server: String, private val token: String) : Remote {
     }
 
     private fun request(method: String, path: String, body: ByteArray?, type: String?): Pair<Int, ByteArray> {
+        var last: IOException? = null
+        repeat(ATTEMPTS) { attempt ->
+            try {
+                return once(method, path, body, type)
+            } catch (e: IOException) {
+                last = e
+                if (attempt + 1 < ATTEMPTS) {
+                    Thread.sleep(PAUSE_MS * (attempt + 1L))
+                }
+            }
+        }
+        throw last ?: IOException("сеть недоступна")
+    }
+
+    private fun once(method: String, path: String, body: ByteArray?, type: String?): Pair<Int, ByteArray> {
         val connection = URL(address + path).openConnection() as HttpURLConnection
         try {
             connection.requestMethod = method
-            connection.connectTimeout = 15_000
-            connection.readTimeout = 120_000
+            connection.connectTimeout = CONNECT_MS
+            connection.readTimeout = READ_MS
             connection.instanceFollowRedirects = false
             connection.useCaches = false
             connection.setRequestProperty("Authorization", "Bearer $token")
@@ -74,5 +90,9 @@ class HttpRemote(server: String, private val token: String) : Remote {
 
     private companion object {
         val BLOB_ID = Regex("[0-9a-f]{64}")
+        const val ATTEMPTS = 4
+        const val PAUSE_MS = 1_000L
+        const val CONNECT_MS = 30_000
+        const val READ_MS = 180_000
     }
 }
