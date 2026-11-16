@@ -37,6 +37,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -93,11 +94,25 @@ private fun SyncScreen() {
     var detailsOpen by remember {
         mutableStateOf(server.isBlank() || token.isBlank() || path.isBlank())
     }
+    var logsOpen by remember { mutableStateOf(true) }
     var log by remember { mutableStateOf("Ключ один и тот же на телефоне и компьютере. На сервер его не отправляют.") }
+    var progress by remember { mutableStateOf("") }
     val scope = rememberCoroutineScope()
+    val logScroll = rememberScrollState()
 
     fun save(key: String, value: String) {
         prefs.edit().putString(key, value).apply()
+    }
+
+    fun appendLog(line: String) {
+        val next = if (log.isBlank()) line else "$log\n$line"
+        log = next.takeLast(12_000)
+        progress = line
+        logsOpen = true
+    }
+
+    LaunchedEffect(log) {
+        if (logsOpen) logScroll.animateScrollTo(logScroll.maxValue)
     }
 
     val scanLauncher = rememberLauncherForActivityResult(ScanContract()) { result ->
@@ -289,9 +304,13 @@ private fun SyncScreen() {
                     return@Button
                 }
                 busy = true
+                detailsOpen = false
+                logsOpen = true
+                log = ""
+                progress = "Начинаю…"
                 scope.launch {
                     try {
-                        val lines = withContext(Dispatchers.IO) {
+                        withContext(Dispatchers.IO) {
                             val key = Crypto.readKey(keyFile)
                             val vault = File(vaultPath)
                             SyncEngine(
@@ -301,27 +320,51 @@ private fun SyncScreen() {
                                 device = VaultPaths.sanitizeDevice(device),
                                 stateFile = defaultStateFile(context.filesDir, vault),
                                 allowMassDelete = allowMass,
+                                onProgress = { line ->
+                                    scope.launch(Dispatchers.Main.immediate) {
+                                        appendLog(line)
+                                    }
+                                },
                             ).sync()
                         }
-                        log = lines.joinToString("\n")
                     } catch (e: Exception) {
-                        log = e.message ?: e.toString()
+                        appendLog(e.message ?: e.toString())
                     } finally {
                         busy = false
+                        progress = ""
                     }
                 }
             },
             enabled = !busy,
             modifier = Modifier.fillMaxWidth(),
         ) { Text(if (busy) "Синхронизирую…" else "Синхронизировать") }
-        Box(
-            Modifier
-                .weight(1f)
-                .fillMaxWidth()
-                .verticalScroll(rememberScrollState()),
-        ) {
-            SelectionContainer {
-                Text(log, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.fillMaxWidth())
+        if (busy && progress.isNotBlank() && !logsOpen) {
+            Text(
+                progress,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.75f),
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
+        OutlinedButton(
+            onClick = { logsOpen = !logsOpen },
+            modifier = Modifier.fillMaxWidth(),
+        ) { Text(if (logsOpen) "Скрыть журнал" else "Показать журнал") }
+        if (logsOpen) {
+            Box(
+                Modifier
+                    .weight(1f)
+                    .fillMaxWidth()
+                    .verticalScroll(logScroll),
+            ) {
+                SelectionContainer {
+                    Text(
+                        log.ifBlank { "Журнал пуст." },
+                        style = MaterialTheme.typography.bodyMedium,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                }
             }
         }
     }

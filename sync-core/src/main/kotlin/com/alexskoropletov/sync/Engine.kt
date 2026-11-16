@@ -11,9 +11,18 @@ class SyncEngine(
     private val device: String,
     private val stateFile: File,
     private val allowMassDelete: Boolean = false,
+    private val onProgress: (String) -> Unit = {},
 ) {
     fun sync(): List<String> {
         val log = mutableListOf<String>()
+        fun say(line: String) {
+            log += line
+            onProgress(line)
+        }
+        fun step(line: String) {
+            onProgress(line)
+        }
+
         val root = try {
             vault.canonicalFile
         } catch (e: IOException) {
@@ -29,19 +38,26 @@ class SyncEngine(
         var noted = false
 
         for (attempt in 1..5) {
+            step("Спрашиваю сервер…")
             val pointer = remote.fetchPointer()
             if (state.revision > 0 && pointer.revision < state.revision) {
                 error("сервер отдал старую ревизию ${pointer.revision}, локально уже ${state.revision}. Ничего не записываю.")
             }
+            step(
+                if (pointer.revision == 0L) "На сервере пусто."
+                else "Ревизия на сервере ${pointer.revision}. Читаю индекс…",
+            )
             val remoteEntries = loadRemote(pointer)
+            step("Сканирую папку…")
             val disk = scanVault(root).files
+            step("На диске ${disk.size} файлов.")
             val delta = localDelta(state.byPath(), disk, root, deviceName, allowMassDelete)
             if (!noted) {
                 if (delta.massDeleteBlocked) {
-                    log += "С диска пропало ${delta.massDeleteCount} файлов. Не удаляю их на других устройствах и скачиваю обратно. Если удаление намеренное — включите «удаление папки» / --allow-mass-delete."
+                    say("С диска пропало ${delta.massDeleteCount} файлов. Не удаляю их на других устройствах и скачиваю обратно. Если удаление намеренное — включите «удаление папки» / --allow-mass-delete.")
                 }
                 if (delta.hidden.isNotEmpty()) {
-                    log += "Не видно ${delta.hidden.size} файлов: хранилище выглядит пустым. Не удаляю их и скачиваю обратно. Если удаление намеренное — --allow-mass-delete."
+                    say("Не видно ${delta.hidden.size} файлов: хранилище выглядит пустым. Не удаляю их и скачиваю обратно. Если удаление намеренное — --allow-mass-delete.")
                 }
                 noted = true
             }
@@ -51,7 +67,7 @@ class SyncEngine(
                 delta.hidden.isEmpty() &&
                 !delta.massDeleteBlocked
             if (quiet) {
-                log += "Изменений нет."
+                say("Изменений нет.")
                 return log
             }
 
@@ -60,9 +76,10 @@ class SyncEngine(
             local.putAll(delta.overlay)
             val plan = merge(base, local, remoteEntries, delta.overlay.keys, deviceName)
             val entries = plan.entries.toMutableMap()
+            val toUpload = entries.values.filter { !it.deleted && it.blobId.isEmpty() }
             var uploaded = 0
-            for (entry in entries.values.toList()) {
-                if (entry.deleted || entry.blobId.isNotEmpty()) continue
+            for (entry in toUpload) {
+                step("Отправляю ${uploaded + 1}/${toUpload.size}: ${entry.path}")
                 val file = VaultPaths.resolve(root, entry.path)
                 if (!file.isFile) error("файл исчез во время синка: ${entry.path}")
                 val bytes = file.readBytes()
@@ -80,7 +97,7 @@ class SyncEngine(
             }
 
             if (delta.overlay.isEmpty() && sameSnapshot(entries, remoteEntries)) {
-                val applied = applyDisk(root, entries, disk)
+                val applied = applyDisk(root, entries, disk, ::step)
                 val next = state.copy(
                     vaultPath = root.path,
                     device = deviceName,
@@ -88,9 +105,10 @@ class SyncEngine(
                     indexBlobId = pointer.blobId.orEmpty(),
                     entries = entries.values.sortedBy { it.path },
                 )
-                return finish(log, next, pointer.revision, entries.values, 0, applied, plan.conflicts)
+                return finish(log, next, pointer.revision, entries.values, 0, applied, plan.conflicts, ::say)
             }
 
+            step("Пишу индекс…")
             val document = IndexDocument(
                 revision = pointer.revision + 1,
                 entries = entries.values.sortedBy { it.path },
@@ -99,10 +117,10 @@ class SyncEngine(
             val indexId = Crypto.sha256(indexCipher)
             remote.putBlob(indexId, indexCipher)
             if (!remote.tryPushIndex(pointer.revision, indexId)) {
-                log += "Сервер уже на новой ревизии, повторяю."
+                say("Сервер уже на новой ревизии, повторяю.")
                 continue
             }
-            val applied = applyDisk(root, entries, disk)
+            val applied = applyDisk(root, entries, disk, ::step)
             val next = LocalState(
                 vaultPath = root.path,
                 device = deviceName,
@@ -110,7 +128,7 @@ class SyncEngine(
                 indexBlobId = indexId,
                 entries = document.entries,
             )
-            return finish(log, next, document.revision, entries.values, uploaded, applied, plan.conflicts)
+            return finish(log, next, document.revision, entries.values, uploaded, applied, plan.conflicts, ::say)
         }
         error("не удалось записать индекс: сервер пять раз успел обновиться раньше")
     }
@@ -123,12 +141,13 @@ class SyncEngine(
         uploaded: Int,
         applied: Applied,
         conflicts: Int,
+        say: (String) -> Unit,
     ): List<String> {
         if (applied.failed.isEmpty()) {
             saveState(state)
         }
-        log += done(revision, entries, uploaded, applied, conflicts)
-        applied.failed.forEach { log += it }
+        say(done(revision, entries, uploaded, applied, conflicts))
+        applied.failed.forEach(say)
         return log
     }
 
@@ -184,10 +203,22 @@ class SyncEngine(
         }
     }
 
-    private fun applyDisk(root: File, entries: Map<String, FileEntry>, disk: Map<String, String>): Applied {
+    private fun applyDisk(
+        root: File,
+        entries: Map<String, FileEntry>,
+        disk: Map<String, String>,
+        step: (String) -> Unit,
+    ): Applied {
         var downloaded = 0
         var deleted = 0
         val failed = mutableListOf<String>()
+        val pending = entries.values
+            .filter { !VaultPaths.isIgnored(it.path) && !it.deleted }
+            .filter { entry ->
+                disk[entry.path] != entry.hash || !VaultPaths.resolve(root, entry.path).isFile
+            }
+            .sortedBy { it.path }
+        var done = 0
         for (entry in entries.values.sortedBy { it.path }) {
             if (VaultPaths.isIgnored(entry.path)) continue
             try {
@@ -201,6 +232,8 @@ class SyncEngine(
                 }
                 if (disk[entry.path] == entry.hash && file.isFile) continue
                 if (file.isDirectory) error("на месте файла папка: ${entry.path}")
+                done++
+                step("Скачиваю $done/${pending.size}: ${entry.path}")
                 val plain = decrypt(remote.getBlob(entry.blobId), entry.path)
                 if (Crypto.sha256(plain) != entry.hash) error("хэш не сошёлся: ${entry.path}")
                 atomicWrite(file, plain)
@@ -209,6 +242,7 @@ class SyncEngine(
                 failed += "${entry.path} — ${e.message ?: "не записался"}"
             }
         }
+        if (downloaded > 0 || deleted > 0) step("Убираю пустые папки…")
         pruneEmptyDirs(root)
         return Applied(downloaded, deleted, failed)
     }
