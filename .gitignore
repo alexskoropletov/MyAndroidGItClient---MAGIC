@@ -4,6 +4,7 @@ build/
 local.properties
 *.jar
 !gradle/wrapper/gradle-wrapper.jar
+!dist/*.jar
 *.iml
 .idea/
 .cxx/

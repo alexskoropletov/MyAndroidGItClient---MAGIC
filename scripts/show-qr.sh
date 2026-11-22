@@ -4,7 +4,7 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 ENV_FILE="$ROOT/.env"
-JAR="$ROOT/sync-cli/build/libs/magic-sync.jar"
+JAR="$("$ROOT/scripts/resolve-jar.sh")"
 
 device="${1:-}"
 if [[ -z "$device" || "$device" == "-h" || "$device" == "--help" ]]; then
@@ -15,7 +15,6 @@ fi
 shift
 
 [[ -f "$ENV_FILE" ]] || { echo "нет $ENV_FILE — скопируйте .env.example" >&2; exit 1; }
-[[ -f "$JAR" ]] || { echo "нет $JAR — сначала ./gradlew :sync-cli:jar" >&2; exit 1; }
 
 set -a
 # shellcheck disable=SC1090

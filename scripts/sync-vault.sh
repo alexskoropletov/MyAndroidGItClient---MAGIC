@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
 # Синхронизация хранилища. Адрес, папка и ключ берутся из .env.
+# Готовый jar: dist/magic-sync.jar (клонировали — можно сразу запускать).
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 ENV_FILE="$ROOT/.env"
-JAR="$ROOT/sync-cli/build/libs/magic-sync.jar"
+JAR="$("$ROOT/scripts/resolve-jar.sh")"
 
 [[ -f "$ENV_FILE" ]] || { echo "нет $ENV_FILE — скопируйте .env.example" >&2; exit 1; }
-[[ -f "$JAR" ]] || { echo "нет $JAR — сначала ./gradlew :sync-cli:jar" >&2; exit 1; }
 
 set -a
 # shellcheck disable=SC1090
